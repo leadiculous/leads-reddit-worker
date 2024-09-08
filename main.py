@@ -1,19 +1,17 @@
 import threading
-from os import getenv
+import grpc
 import praw
-
-# https://github.com/sleeyax/reddit-stremio-bot/blob/main/bot.py
-# https://praw.readthedocs.io/en/stable/tutorials/reply_bot.html
-
 import psycopg2
+from os import getenv
 from dotenv import load_dotenv
+from ai_service_pb2 import ClassificationRequest, ClassificationResponse
+from ai_service_pb2_grpc import ClassifierStub
+from google.protobuf.json_format import MessageToJson
 
 load_dotenv()
 
 db = psycopg2.connect(getenv("DATABASE_URL"))
 cursor = db.cursor()
-
-bots = []
 
 
 class RedditBot:
@@ -27,15 +25,26 @@ class RedditBot:
             password=getenv("DEFAULT_PASSWORD"),
             user_agent="Leads Finder App (by u/Sleeyax1)",
         )
-        self.subreddits = ["AskReddit"]
+        self.ai_service = ClassifierStub(grpc.insecure_channel(getenv("AI_SERVICE_ADDRESS")))
 
     def start(self):
         subreddit = self.reddit.subreddit("all")
         for submission in subreddit.stream.submissions():
-            print(f"bot for campaign {self.campaign_id} found submission {submission}")
+            req = ClassificationRequest(title=submission.title, body=submission.selftext)
+            req.tags.extend(self.tags)
+            res: ClassificationResponse = self.ai_service.Classify(req)
+            print(f"Reddit post URL: {submission.url}")
+            print("AI request: ")
+            print(MessageToJson(req))
+            print("AI response: ")
+            print(MessageToJson(res))
+            print("AI thinks this is a lead:", res.is_lead)
+            print("-" * 50)
 
 
 def init():
+    bots = []
+
     cursor.execute("""
     SELECT t.campaign_id, array_agg(t.tag) as tags FROM public.campaigns c
     INNER JOIN public.campaign_tags t ON t.campaign_id = c.id
@@ -43,19 +52,18 @@ def init():
     """)
     campaigns = cursor.fetchall()
 
-    print(f"Found {len(campaigns)} campaigns")
+    print(f"Loaded {len(campaigns)} campaigns with tags")
 
     for campaign in campaigns:
         campaign_id = campaign[0]
         tags = campaign[1]
         bots.append(RedditBot(campaign_id, tags))
 
-    # start each bot in a new thread
+    # Run each bot in a separate thread
     for bot in bots:
-        print(f"Starting bot for campaign {bot.campaign_id} in separate thread")
         bot_thread = threading.Thread(target=bot.start)
         bot_thread.start()
 
 
 if __name__ == "__main__":
-    init()
+     init()

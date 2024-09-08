@@ -1,3 +1,4 @@
 .idea/
 .env
 .idea/
+*pb2*.py*

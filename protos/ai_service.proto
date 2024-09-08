@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package leads;
+
+service Classifier {
+  rpc Classify (ClassificationRequest) returns (ClassificationResponse) {}
+}
+
+// Represents a social media message.
+message ClassificationRequest {
+  string title = 1;
+  string body = 2;
+  repeated string tags = 3;
+}
+
+// The response message containing the classification result.
+message ClassificationResponse {
+  bool is_lead = 1;
+  repeated string matched_topics = 2;
+  bool is_relevant_topic = 3;
+  bool is_exact_topic = 4;
+  bool is_topic_found_in_question = 5;
+  uint32 confidence_points = 6;
+  float confidence_score = 7;
+}
