@@ -17,7 +17,7 @@ cursor = db.cursor()
 class RedditBot:
     def __init__(self, campaign_id: int, tags: list):
         self.campaign_id = campaign_id
-        self.tags = tags
+        self.topics = tags
         self.reddit = praw.Reddit(
             client_id=getenv("CLIENT_ID"),
             client_secret=getenv("CLIENT_SECRET"),
@@ -31,15 +31,15 @@ class RedditBot:
         subreddit = self.reddit.subreddit("all")
         for submission in subreddit.stream.submissions():
             req = ClassificationRequest(title=submission.title, body=submission.selftext)
-            req.tags.extend(self.tags)
+            req.topics.extend(self.topics)
             res: ClassificationResponse = self.ai_service.Classify(req)
-            print(f"Reddit post URL: {submission.url}")
-            print("AI request: ")
-            print(MessageToJson(req))
-            print("AI response: ")
-            print(MessageToJson(res))
-            print("AI thinks this is a lead:", res.is_lead)
-            print("-" * 50)
+            if len(res.matched_topics) > 0:
+                print(f"Reddit post URL: {submission.url}")
+                print("AI request: ")
+                print(MessageToJson(req))
+                print("AI response: ")
+                print(MessageToJson(res))
+                print("-" * 50)
 
 
 def init():

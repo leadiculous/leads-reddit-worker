@@ -10,16 +10,17 @@ service Classifier {
 message ClassificationRequest {
   string title = 1;
   string body = 2;
-  repeated string tags = 3;
+  repeated string topics = 3;
 }
 
 // The response message containing the classification result.
 message ClassificationResponse {
-  bool is_lead = 1;
-  repeated string matched_topics = 2;
-  bool is_relevant_topic = 3;
-  bool is_exact_topic = 4;
-  bool is_topic_found_in_question = 5;
-  uint32 confidence_points = 6;
-  float confidence_score = 7;
+  repeated Topic matched_topics = 1;
+  float score_threshold = 2;
+  float execution_time = 3;
+}
+
+message Topic {
+   string label = 1;
+   float score = 2;
 }
