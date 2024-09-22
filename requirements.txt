@@ -1,6 +1,10 @@
 praw==7.7.1
-psycopg2==2.9.9
+prawcore~=2.4.0
 python-dotenv==1.0.1
 grpcio==1.66.1
 grpcio-tools==1.66.1
 protobuf~=5.28.0
+asyncio~=3.4.3
+asyncpg~=0.29.0
+asyncpraw~=7.7.1
+supabase~=2.7.4
