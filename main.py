@@ -17,83 +17,84 @@ if getenv("DEBUG").lower() == "true":
         level=logging.DEBUG,
     )
 
-db = psycopg2.connect(getenv("DATABASE_URL"))
 
+class RedditWorker:
+    def __init__(self):
+        self.db = psycopg2.connect(getenv("DATABASE_URL"))
+        self.campaigns = self.load_campaigns()
 
-def load_campaigns():
-    cursor = db.cursor()
-    cursor.execute("""
-          SELECT t.campaign_id, array_agg(t.tag) as tags FROM public.campaigns c
-          INNER JOIN public.campaign_tags t ON t.campaign_id = c.id
-          GROUP BY t.campaign_id
-          """)
-    return cursor.fetchall()
+    def load_campaigns(self):
+        cursor = self.db.cursor()
+        cursor.execute("""
+              SELECT t.campaign_id, array_agg(t.tag) as tags FROM public.campaigns c
+              INNER JOIN public.campaign_tags t ON t.campaign_id = c.id
+              GROUP BY t.campaign_id
+              """)
+        return cursor.fetchall()
 
+    def on_campaign_change(self, payload):
+        print("-- DB event --")
+        print(payload)
+        print("-----")
 
-campaigns = load_campaigns()
+    async def monitor_campaigns(self):
+        supabase: AClient = await acreate_client(
+            getenv("SUPABASE_URL"),
+            getenv("SUPABASE_KEY"),
+            options=AClientOptions(realtime={"auto_reconnect": True, "max_retries": 10})
+        )
 
+        await supabase.realtime.connect()
 
-def on_campaign_change(payload):
-    print("-- DB event --")
-    print(payload)
-    print("-----")
+        await (supabase.realtime
+               .channel("reddit-worker")
+               .on_postgres_changes("*", schema="public", table="campaigns", callback=self.on_campaign_change)
+               .subscribe())
 
+        await supabase.realtime.listen()
 
-async def monitor_campaigns():
-    supabase: AClient = await acreate_client(
-        getenv("SUPABASE_URL"),
-        getenv("SUPABASE_KEY"),
-        options=AClientOptions(realtime={"auto_reconnect": True, "max_retries": 10})
-    )
+    async def monitor_subreddits(self):
+        # create praw instance
+        reddit = asyncpraw.Reddit(
+            client_id=getenv("CLIENT_ID"),
+            client_secret=getenv("CLIENT_SECRET"),
+            username=getenv("DEFAULT_USERNAME"),
+            password=getenv("DEFAULT_PASSWORD"),
+            user_agent="Leads Finder App (by u/Sleeyax1)",
+        )
 
-    await supabase.realtime.connect()
+        # create AI service
+        ai_service = ClassifierStub(grpc.aio.insecure_channel(getenv("AI_SERVICE_ADDRESS")))
 
-    await (supabase.realtime
-           .channel("reddit-worker")
-           .on_postgres_changes("*", schema="public", table="campaigns", callback=on_campaign_change)
-           .subscribe())
+        subreddit = await reddit.subreddit("all")
+        async for submission in subreddit.stream.submissions():
+            for campaign in self.campaigns:
+                campaign_id = campaign[0]
+                topics = campaign[1]
 
-    await supabase.realtime.listen()
+                req = ClassificationRequest(title=submission.title, body=submission.selftext)
+                req.topics.extend(topics)
 
+                res: ClassificationResponse = await ai_service.Classify(req)
 
-async def monitor_subreddits():
-    # create praw instance
-    reddit = asyncpraw.Reddit(
-        client_id=getenv("CLIENT_ID"),
-        client_secret=getenv("CLIENT_SECRET"),
-        username=getenv("DEFAULT_USERNAME"),
-        password=getenv("DEFAULT_PASSWORD"),
-        user_agent="Leads Finder App (by u/Sleeyax1)",
-    )
+                if len(res.matched_topics) > 0:
+                    print(f"Reddit post URL: {submission.url}")
+                    print("AI request: ")
+                    print(MessageToJson(req))
+                    print("AI response: ")
+                    print(MessageToJson(res))
+                    print("-" * 50)
 
-    # create AI service
-    ai_service = ClassifierStub(grpc.aio.insecure_channel(getenv("AI_SERVICE_ADDRESS")))
-
-    subreddit = await reddit.subreddit("all")
-    async for submission in subreddit.stream.submissions():
-        for campaign in campaigns:
-            campaign_id = campaign[0]
-            topics = campaign[1]
-
-            req = ClassificationRequest(title=submission.title, body=submission.selftext)
-            req.topics.extend(topics)
-
-            res: ClassificationResponse = await ai_service.Classify(req)
-
-            if len(res.matched_topics) > 0:
-                print(f"Reddit post URL: {submission.url}")
-                print("AI request: ")
-                print(MessageToJson(req))
-                print("AI response: ")
-                print(MessageToJson(res))
-                print("-" * 50)
+    async def start(self):
+        await asyncio.gather(
+            self.monitor_campaigns(),
+            self.monitor_subreddits(),
+        )
 
 
 async def main():
-    await asyncio.gather(
-        monitor_campaigns(),
-        monitor_subreddits(),
-    )
+    worker = RedditWorker()
+    await worker.start()
 
 
 if __name__ == "__main__":
