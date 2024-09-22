@@ -1,8 +1,8 @@
-import asyncio
 import logging
 import grpc
+import asyncio
+import asyncpg
 import asyncpraw
-import psycopg2
 from os import getenv
 from dotenv import load_dotenv
 from ai_service_pb2 import ClassificationRequest, ClassificationResponse
@@ -19,18 +19,22 @@ if getenv("DEBUG").lower() == "true":
 
 
 class RedditWorker:
-    def __init__(self):
-        self.db = psycopg2.connect(getenv("DATABASE_URL"))
-        self.campaigns = self.load_campaigns()
+    db: asyncpg.connection.Connection
+    campaigns: list
 
-    def load_campaigns(self):
-        cursor = self.db.cursor()
-        cursor.execute("""
+    async def init(self):
+        self.db = await asyncpg.connect(getenv("DATABASE_URL"))
+        self.campaigns = await self._load_campaigns()
+        logging.info(f"loaded {len(self.campaigns)} initial campaigns")
+
+    async def _load_campaigns(self):
+        return await self.db.fetch(
+            """
               SELECT t.campaign_id, array_agg(t.tag) as tags FROM public.campaigns c
               INNER JOIN public.campaign_tags t ON t.campaign_id = c.id
               GROUP BY t.campaign_id
-              """)
-        return cursor.fetchall()
+            """
+        )
 
     def on_campaign_change(self, payload):
         print("-- DB event --")
@@ -69,8 +73,8 @@ class RedditWorker:
         subreddit = await reddit.subreddit("all")
         async for submission in subreddit.stream.submissions():
             for campaign in self.campaigns:
-                campaign_id = campaign[0]
-                topics = campaign[1]
+                campaign_id = campaign['campaign_id']
+                topics = campaign['tags']
 
                 req = ClassificationRequest(title=submission.title, body=submission.selftext)
                 req.topics.extend(topics)
@@ -94,6 +98,7 @@ class RedditWorker:
 
 async def main():
     worker = RedditWorker()
+    await worker.init()
     await worker.start()
 
 
