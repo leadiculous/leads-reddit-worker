@@ -63,9 +63,15 @@ class RedditWorker:
     async def _load_campaigns(self):
         return await self.db.fetch(
             """
-              SELECT t.campaign_id, json_agg(json_build_object('id', t.id, 'tag', t.tag)) AS tags FROM public.campaigns c
-              INNER JOIN public.campaign_tags t ON t.campaign_id = c.id
-              GROUP BY t.campaign_id
+              SELECT 
+                c.id as campaign_id, 
+                COALESCE(
+                  json_agg(json_build_object('id', t.id, 'tag', t.tag)) FILTER (WHERE t.id IS NOT NULL),
+                  '[]'
+                ) AS tags 
+              FROM public.campaigns c
+              LEFT JOIN public.campaign_tags t ON t.campaign_id = c.id
+              GROUP BY c.id
             """
         )
 
@@ -73,9 +79,6 @@ class RedditWorker:
         data = payload['data']
         table = data['table']
         event_type = data['type']
-
-        # TODO: handle scenario where on app startup theres a campaign with no tags, and then a tag is added to it
-        # TODO: handle scenario where a campaign is deleted
 
         if table == "campaign_tags":
             for i, campaign in enumerate(self.campaigns):
@@ -95,13 +98,28 @@ class RedditWorker:
                     # find and remove the tag from the campaign
                     for tag in self.campaigns[i]['tags']:
                         if tag['id'] == tag_id:
-                            if len(self.campaigns[i]['tags']) == 1:
-                                # remove the campaign altogether if it no longer has any tags
-                                self.campaigns.pop(i)
-                            else:
-                                # otherwise, just remove the tag
-                                self.campaigns[i]['tags'].remove(tag)
+                            self.campaigns[i]['tags'].remove(tag)
                             break
+        elif table == "campaigns":
+            if event_type == "INSERT":
+                # the inserted record
+                record = data['record']
+
+                # add the campaign to the list
+                self.campaigns.append({
+                    "campaign_id": record['id'],
+                    "tags": []
+                })
+            elif event_type == "DELETE":
+                # the id of the deleted campaign
+                campaign_id = data['old_record']['id']
+
+                # remove the campaign from the list
+                for i, campaign in enumerate(self.campaigns):
+                    if campaign['campaign_id'] == campaign_id:
+                        self.campaigns.pop(i)
+                        break
+
         self.log_campaigns()
 
     async def monitor_campaigns(self):
@@ -113,10 +131,11 @@ class RedditWorker:
 
         await supabase.realtime.connect()
 
-        await (supabase.realtime
-               .channel("reddit-worker")
-               .on_postgres_changes("*", schema="public", table="campaign_tags", callback=self.on_campaign_change)
-               .subscribe())
+        for table in ["campaigns", "campaign_tags"]:
+            await (supabase.realtime
+                   .channel(f"reddit_worker_{table}")
+                   .on_postgres_changes("*", schema="public", table=table, callback=self.on_campaign_change)
+                   .subscribe())
 
         await supabase.realtime.listen()
 
