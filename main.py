@@ -158,6 +158,10 @@ class RedditWorker:
                 campaign_id = campaign['campaign_id']
                 topics = [tag['tag'] for tag in campaign['tags']]
 
+                # the AI service can't process data without topics
+                if len(topics) == 0:
+                    continue
+
                 req = ClassificationRequest(title=submission.title, body=submission.selftext)
                 req.topics.extend(topics)
 
