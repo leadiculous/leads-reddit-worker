@@ -1,15 +1,21 @@
 import json
 import logging
+import time
 import grpc
 import asyncio
 import asyncpg
 import asyncpraw
+from typing import Callable
 from os import getenv
 from dotenv import load_dotenv
+from praw.models import Submission, Redditor
 from ai_service_pb2 import ClassificationRequest, ClassificationResponse
 from ai_service_pb2_grpc import ClassifierStub
 from google.protobuf.json_format import MessageToJson
 from supabase import acreate_client, AClient, AClientOptions
+from cuid2 import cuid_wrapper
+
+publicId: Callable[[], str] = cuid_wrapper()
 
 load_dotenv()
 
@@ -168,12 +174,68 @@ class RedditWorker:
                 res: ClassificationResponse = await ai_service.Classify(req)
 
                 if len(res.matched_topics) > 0:
-                    print(f"Reddit post URL: {submission.url}")
+                    print(f"Reddit post URL: https://www.reddit.com{submission.permalink}")
                     print("AI request: ")
                     print(MessageToJson(req))
                     print("AI response: ")
                     print(MessageToJson(res))
                     print("-" * 50)
+                    start = time.time()
+                    await self.save_submission(campaign_id, submission, res)
+                    end = time.time()
+                    self.logger.debug(f"Saved submission in {end - start} seconds")
+
+    async def save_submission(self, campaign_id: int, submission: Submission, classification: ClassificationResponse):
+        async with self.db.transaction():
+            # write the lead to the database
+            query = """
+                INSERT INTO leads (
+                    public_id, 
+                    campaign_id, 
+                    confidence_score_threshold,
+                    post_source, 
+                    post_author, 
+                    post_created_at, 
+                    post_num_comments, 
+                    post_is_nsfw, 
+                    post_likes, 
+                    post_url, 
+                    post_title, 
+                    post_content
+                ) VALUES ($1, $2, $3, $4, $5, to_timestamp($6), $7, $8, $9, $10, $11, $12) 
+                RETURNING id
+            """
+            lead_id = await self.db.fetchval(
+                query,
+                publicId(),
+                campaign_id,
+                classification.score_threshold,
+                "reddit",
+                submission.author.name,
+                submission.created_utc,
+                submission.num_comments,
+                submission.over_18,
+                submission.score,
+                f"https://www.reddit.com{submission.permalink}",
+                submission.title,
+                submission.selftext
+            )
+
+            # write the classification results to the database
+            for topic in classification.matched_topics:
+                query = """
+                    INSERT INTO lead_topics (
+                        lead_id,
+                        topic,
+                        confidence_score
+                    ) VALUES ($1, $2, $3)
+                """
+                await self.db.execute(
+                    query,
+                    lead_id,
+                    topic.label,
+                    topic.score
+                )
 
     async def start(self):
         await asyncio.gather(
