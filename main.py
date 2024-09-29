@@ -196,13 +196,11 @@ class RedditWorker:
                     post_source, 
                     post_author, 
                     post_created_at, 
-                    post_num_comments, 
-                    post_is_nsfw, 
-                    post_likes, 
+                    post_is_nsfw,  
                     post_url, 
                     post_title, 
                     post_content
-                ) VALUES ($1, $2, $3, $4, $5, to_timestamp($6), $7, $8, $9, $10, $11, $12) 
+                ) VALUES ($1, $2, $3, $4, $5, to_timestamp($6), $7, $8, $9, $10) 
                 RETURNING id
             """
             lead_id = await self.db.fetchval(
@@ -213,9 +211,7 @@ class RedditWorker:
                 "reddit",
                 submission.author.name,
                 submission.created_utc,
-                submission.num_comments,
                 submission.over_18,
-                submission.score,
                 f"https://www.reddit.com{submission.permalink}",
                 submission.title,
                 submission.selftext
