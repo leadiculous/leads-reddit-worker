@@ -5,7 +5,6 @@ import grpc
 import asyncio
 import asyncpg
 import asyncpraw
-from typing import Callable
 from os import getenv
 from dotenv import load_dotenv
 from praw.models import Submission, Redditor
@@ -13,9 +12,6 @@ from ai_service_pb2 import ClassificationRequest, ClassificationResponse
 from ai_service_pb2_grpc import ClassifierStub
 from google.protobuf.json_format import MessageToJson
 from supabase import acreate_client, AClient, AClientOptions
-from cuid2 import cuid_wrapper
-
-publicId: Callable[[], str] = cuid_wrapper()
 
 load_dotenv()
 
@@ -71,6 +67,7 @@ class RedditWorker:
             """
               SELECT 
                 c.id as campaign_id, 
+                c.user_id,
                 COALESCE(
                   json_agg(json_build_object('id', t.id, 'tag', t.tag)) FILTER (WHERE t.id IS NOT NULL),
                   '[]'
@@ -114,6 +111,7 @@ class RedditWorker:
                 # add the campaign to the list
                 self.campaigns.append({
                     "campaign_id": record['id'],
+                    "user_id": record['user_id'],
                     "tags": []
                 })
             elif event_type == "DELETE":
@@ -162,6 +160,7 @@ class RedditWorker:
         async for submission in subreddit.stream.submissions():
             for campaign in self.campaigns:
                 campaign_id = campaign['campaign_id']
+                user_id = campaign['user_id']
                 topics = [tag['tag'] for tag in campaign['tags']]
 
                 # the AI service can't process data without topics
@@ -181,17 +180,17 @@ class RedditWorker:
                     print(MessageToJson(res))
                     print("-" * 50)
                     start = time.time()
-                    await self.save_submission(campaign_id, submission, res)
+                    await self.save_submission(campaign_id, user_id, submission, res)
                     end = time.time()
                     self.logger.debug(f"Saved submission in {end - start} seconds")
 
-    async def save_submission(self, campaign_id: int, submission: Submission, classification: ClassificationResponse):
+    async def save_submission(self, campaign_id: int, user_id: str, submission: Submission, classification: ClassificationResponse):
         async with self.db.transaction():
             # write the lead to the database
             query = """
                 INSERT INTO leads (
-                    public_id, 
                     campaign_id, 
+                    user_id,
                     confidence_score_threshold,
                     post_source, 
                     post_author, 
@@ -205,8 +204,8 @@ class RedditWorker:
             """
             lead_id = await self.db.fetchval(
                 query,
-                publicId(),
                 campaign_id,
+                user_id,
                 classification.score_threshold,
                 "reddit",
                 submission.author.name,
